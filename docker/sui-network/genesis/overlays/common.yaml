@@ -18,3 +18,6 @@ validator:
     force-disable-state-consistency-check: false
     enable-move-vm-paranoid-checks: false
   epoch_duration_ms: 120000
+  execution-cache:
+    writeback-cache:
+      max-cache-size: 100000  
