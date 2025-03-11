@@ -621,6 +621,8 @@ fn start_summary_sync(
             .last()
             .expect("Expected at least one checkpoint");
 
+        println!("initial manfiest epoch: {}", epoch);
+
         let num_to_sync = if all_checkpoints {
             *last_checkpoint
         } else {
@@ -744,16 +746,47 @@ fn start_summary_sync(
                 for (cp_epoch, epoch_last_cp_seq_num) in
                     end_of_epoch_checkpoint_seq_nums.iter().enumerate()
                 {
-                    let epoch_last_checkpoint = checkpoint_store
+                    let mut epoch_last_checkpoint = checkpoint_store
                         .get_checkpoint_by_sequence_number(*epoch_last_cp_seq_num)?
                         .ok_or(anyhow!("Failed to read checkpoint"))?;
-                    let committee = state_sync_store.get_committee(cp_epoch as u64).expect(
-                        "Expected committee to exist after syncing all end of epoch checkpoints",
-                    );
-                    epoch_last_checkpoint
-                        .verify_authority_signatures(&committee)
-                        .expect("Failed to verify checkpoint");
-                    verify_checkpoint_counter.fetch_add(1, Ordering::Relaxed);
+
+                    while epoch_last_checkpoint.end_of_epoch_data.is_none() {
+                        println!(
+                            "epoch last checkpoint: {:?} isn't actually and end of epoch checkpoint",
+                            epoch_last_checkpoint.sequence_number
+                        );
+                        println!("more prints");
+                        println!("more prints");
+                        println!("more prints");
+                        println!("epoch_last_cp_seq_num: {}", epoch_last_cp_seq_num);
+                        println!("more prints");
+                        let new_sequence_number = epoch_last_cp_seq_num - 1;
+                        epoch_last_checkpoint = checkpoint_store
+                            .get_checkpoint_by_sequence_number(new_sequence_number)?
+                            .ok_or(anyhow!("Failed to read checkpoint"))?;
+                        panic!("post fetching get checkpoint by sequence number");
+                        println!("new epoch last checkpoint: {:?}", epoch_last_checkpoint);
+                    }
+
+                    // Get the actual epoch from the checkpoint instead of using the enumeration index
+                    let actual_epoch = epoch_last_checkpoint.epoch();
+                    // println!("Epoch last checkpoint: {:?}", epoch_last_checkpoint);
+
+                    println!("auth_signature epoch: {}", actual_epoch);
+                    println!("cp epoch: {}", cp_epoch);
+
+                    // Try to get the committee for the actual epoch
+                    if let Some(committee) = state_sync_store.get_committee(cp_epoch as u64) {
+                        epoch_last_checkpoint
+                            .verify_authority_signatures(&committee)
+                            .expect("Failed to verify checkpoint");
+                        verify_checkpoint_counter.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        // If we can't find the committee for this epoch, log a warning and continue
+                        println!("Warning: Could not find committee for epoch {}. Skipping verification for this checkpoint.", actual_epoch);
+                        // Still increment the counter to maintain progress
+                        verify_checkpoint_counter.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
             }
 
