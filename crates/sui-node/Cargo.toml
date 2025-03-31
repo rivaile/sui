@@ -34,6 +34,8 @@ serde.workspace = true
 bin-version.workspace = true
 url.workspace = true
 humantime.workspace = true
+tidehunter.workspace = true
+
 
 sui-archival.workspace = true
 sui-tls.workspace = true
