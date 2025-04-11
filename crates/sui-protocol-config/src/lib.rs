@@ -18,7 +18,7 @@ use tracing::{info, warn};
 
 /// The minimum and maximum protocol versions supported by this build.
 const MIN_PROTOCOL_VERSION: u64 = 1;
-const MAX_PROTOCOL_VERSION: u64 = 79;
+const MAX_PROTOCOL_VERSION: u64 = 80;
 
 // Record history of protocol version allocations here:
 //
@@ -228,6 +228,12 @@ const MAX_PROTOCOL_VERSION: u64 = 79;
 //             Enable execution time estimate mode for congestion control on testnet.
 // Version 79: Enable median based commit timestamp in consensus on testnet.
 //             Increase threshold for bad nodes that won't be considered leaders in consensus in testnet
+//             Enable load_nitro_attestation move function in sui framework in testnet.
+//             Enable consensus garbage collection for mainnet
+//             Enable the new consensus commit rule for mainnet.
+// Version 80: Enable median based commit timestamp in consensus on mainnet.
+//             Enforce checkpoint timestamps are non-decreasing for testnet and mainnet.
+//             Increase threshold for bad nodes that won't be considered leaders in consensus in mainnet
 
 #[derive(Copy, Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProtocolVersion(u64);
@@ -659,6 +665,14 @@ struct FeatureFlags {
     // `Result`s of length not equal to 1
     #[serde(skip_serializing_if = "is_false")]
     normalize_ptb_arguments: bool,
+
+    // If true, enabled batched block sync in consensus.
+    #[serde(skip_serializing_if = "is_false")]
+    consensus_batched_block_sync: bool,
+
+    // If true, enforces checkpoint timestamps are non-decreasing.
+    #[serde(skip_serializing_if = "is_false")]
+    enforce_checkpoint_timestamp_monotonicity: bool,
 
     // Enable native function for multiparty transfer
     #[serde(skip_serializing_if = "is_false")]
@@ -1878,6 +1892,10 @@ impl ProtocolConfig {
         res
     }
 
+    pub fn consensus_batched_block_sync(&self) -> bool {
+        self.feature_flags.consensus_batched_block_sync
+    }
+
     pub fn convert_type_argument_error(&self) -> bool {
         self.feature_flags.convert_type_argument_error
     }
@@ -1919,6 +1937,10 @@ impl ProtocolConfig {
 
     pub fn normalize_ptb_arguments(&self) -> bool {
         self.feature_flags.normalize_ptb_arguments
+    }
+
+    pub fn enforce_checkpoint_timestamp_monotonicity(&self) -> bool {
+        self.feature_flags.enforce_checkpoint_timestamp_monotonicity
     }
 
     pub fn enable_multiparty_transfer(&self) -> bool {
@@ -3438,9 +3460,22 @@ impl ProtocolConfig {
                         // Increase threshold for bad nodes that won't be considered
                         // leaders in consensus in testnet
                         cfg.consensus_bad_nodes_stake_threshold = Some(30);
+
+                        cfg.feature_flags.consensus_batched_block_sync = true;
+
+                        // Enable verify nitro attestation in testnet.
+                        cfg.feature_flags.enable_nitro_attestation = true
                     }
                     cfg.feature_flags.normalize_ptb_arguments = true;
                     cfg.transfer_multiparty_transfer_internal_cost_base = Some(52);
+
+                    cfg.consensus_gc_depth = Some(60);
+                    cfg.feature_flags.consensus_linearize_subdag_v2 = true;
+                }
+                80 => {
+                    cfg.feature_flags.consensus_median_based_commit_timestamp = true;
+                    cfg.feature_flags.enforce_checkpoint_timestamp_monotonicity = true;
+                    cfg.consensus_bad_nodes_stake_threshold = Some(30)
                 }
                 // Use this template when making changes:
                 //
@@ -3628,6 +3663,10 @@ impl ProtocolConfig {
 
     pub fn set_consensus_median_based_commit_timestamp_for_testing(&mut self, val: bool) {
         self.feature_flags.consensus_median_based_commit_timestamp = val;
+    }
+
+    pub fn set_consensus_batched_block_sync_for_testing(&mut self, val: bool) {
+        self.feature_flags.consensus_batched_block_sync = val;
     }
 }
 

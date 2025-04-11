@@ -45,6 +45,7 @@ use sui_json_rpc_api::JsonRpcMetrics;
 use sui_network::randomness;
 use sui_rpc_api::subscription::SubscriptionService;
 use sui_rpc_api::RpcMetrics;
+use sui_rpc_api::ServerVersion;
 use sui_types::base_types::ConciseableName;
 use sui_types::crypto::RandomnessRound;
 use sui_types::digests::ChainIdentifier;
@@ -55,7 +56,6 @@ use sui_types::messages_consensus::ConsensusTransactionKind;
 use sui_types::sui_system_state::SuiSystemState;
 use sui_types::transaction::VerifiedCertificate;
 use tap::tap::TapFallible;
-use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 use tokio::sync::{broadcast, mpsc, watch, Mutex};
 use tokio::task::{JoinHandle, JoinSet};
@@ -239,8 +239,11 @@ use sui_types::execution_config_utils::to_binary_config;
 pub struct SuiNode {
     config: NodeConfig,
     validator_components: Mutex<Option<ValidatorComponents>>,
-    /// The http server responsible for serving JSON-RPC as well as the experimental rest service
-    _http_server: Option<sui_http::ServerHandle>,
+
+    /// The http servers responsible for serving RPC traffic (gRPC and JSON-RPC)
+    #[allow(unused)]
+    http_servers: HttpServers,
+
     state: Arc<AuthorityState>,
     transaction_orchestrator: Option<Arc<TransactiondOrchestrator<NetworkAuthorityClient>>>,
     registry_service: RegistryService,
@@ -296,9 +299,13 @@ impl SuiNode {
     pub async fn start(
         config: NodeConfig,
         registry_service: RegistryService,
-        custom_rpc_runtime: Option<Handle>,
     ) -> Result<Arc<SuiNode>> {
-        Self::start_async(config, registry_service, custom_rpc_runtime, "unknown").await
+        Self::start_async(
+            config,
+            registry_service,
+            ServerVersion::new("sui-node", "unknown"),
+        )
+        .await
     }
 
     fn start_jwk_updater(
@@ -439,8 +446,7 @@ impl SuiNode {
     pub async fn start_async(
         config: NodeConfig,
         registry_service: RegistryService,
-        custom_rpc_runtime: Option<Handle>,
-        software_version: &'static str,
+        server_version: ServerVersion,
     ) -> Result<Arc<SuiNode>> {
         NodeConfigMetrics::new(&registry_service.default_registry()).record_metrics(&config);
         let mut config = config.clone();
@@ -632,13 +638,16 @@ impl SuiNode {
         };
 
         let rpc_index = if is_full_node && config.rpc().is_some_and(|rpc| rpc.enable_indexing()) {
-            Some(Arc::new(RpcIndexStore::new(
-                &config.db_path(),
-                &store,
-                &checkpoint_store,
-                &epoch_store,
-                &cache_traits.backing_package_store,
-            )))
+            Some(Arc::new(
+                RpcIndexStore::new(
+                    &config.db_path(),
+                    &store,
+                    &checkpoint_store,
+                    &epoch_store,
+                    &cache_traits.backing_package_store,
+                )
+                .await,
+            ))
         } else {
             None
         };
@@ -801,14 +810,13 @@ impl SuiNode {
             None
         };
 
-        let (http_server, subscription_service_checkpoint_sender) = build_http_server(
+        let (http_servers, subscription_service_checkpoint_sender) = build_http_servers(
             state.clone(),
             state_sync_store,
             &transaction_orchestrator.clone(),
             &config,
             &prometheus_registry,
-            custom_rpc_runtime,
-            software_version,
+            server_version,
         )
         .await?;
 
@@ -878,7 +886,7 @@ impl SuiNode {
         let node = Self {
             config,
             validator_components: Mutex::new(validator_components),
-            _http_server: http_server,
+            http_servers,
             state,
             transaction_orchestrator,
             registry_service,
@@ -2188,21 +2196,20 @@ fn build_kv_store(
     )))
 }
 
-pub async fn build_http_server(
+async fn build_http_servers(
     state: Arc<AuthorityState>,
     store: RocksDbStore,
     transaction_orchestrator: &Option<Arc<TransactiondOrchestrator<NetworkAuthorityClient>>>,
     config: &NodeConfig,
     prometheus_registry: &Registry,
-    _custom_runtime: Option<Handle>,
-    software_version: &'static str,
+    server_version: ServerVersion,
 ) -> Result<(
-    Option<sui_http::ServerHandle>,
+    HttpServers,
     Option<tokio::sync::mpsc::Sender<CheckpointData>>,
 )> {
     // Validators do not expose these APIs
     if config.consensus_config().is_some() {
-        return Ok((None, None));
+        return Ok((HttpServers::default(), None));
     }
 
     let mut router = axum::Router::new();
@@ -2284,10 +2291,9 @@ pub async fn build_http_server(
     let (subscription_service_checkpoint_sender, subscription_service_handle) =
         SubscriptionService::build(prometheus_registry);
     let rpc_router = {
-        let mut rpc_service = sui_rpc_api::RpcService::new(
-            Arc::new(RestReadStore::new(state.clone(), store)),
-            software_version,
-        );
+        let mut rpc_service =
+            sui_rpc_api::RpcService::new(Arc::new(RestReadStore::new(state.clone(), store)));
+        rpc_service.with_server_version(server_version);
 
         if let Some(config) = config.rpc.clone() {
             rpc_service.with_config(config);
@@ -2322,13 +2328,43 @@ pub async fn build_http_server(
 
     router = router.merge(rpc_router).layer(layers);
 
-    let handle = sui_http::Builder::new()
+    let https = if let Some((tls_config, https_address)) = config
+        .rpc()
+        .and_then(|config| config.tls_config().map(|tls| (tls, config.https_address())))
+    {
+        let https = sui_http::Builder::new()
+            .tls_single_cert(tls_config.cert(), tls_config.key())
+            .and_then(|builder| builder.serve(https_address, router.clone()))
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        info!(
+            https_address =? https.local_addr(),
+            "HTTPS rpc server listening on {}",
+            https.local_addr()
+        );
+
+        Some(https)
+    } else {
+        None
+    };
+
+    let http = sui_http::Builder::new()
         .serve(&config.json_rpc_address, router)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        .map_err(|e| anyhow::anyhow!(e))?;
 
-    info!(local_addr =? handle.local_addr(), "Sui JSON-RPC server listening on {}", handle.local_addr());
+    info!(
+        http_address =? http.local_addr(),
+        "HTTP rpc server listening on {}",
+        http.local_addr()
+    );
 
-    Ok((Some(handle), Some(subscription_service_checkpoint_sender)))
+    Ok((
+        HttpServers {
+            http: Some(http),
+            https,
+        },
+        Some(subscription_service_checkpoint_sender),
+    ))
 }
 
 #[cfg(not(test))]
@@ -2339,4 +2375,12 @@ fn max_tx_per_checkpoint(protocol_config: &ProtocolConfig) -> usize {
 #[cfg(test)]
 fn max_tx_per_checkpoint(_: &ProtocolConfig) -> usize {
     2
+}
+
+#[derive(Default)]
+struct HttpServers {
+    #[allow(unused)]
+    http: Option<sui_http::ServerHandle>,
+    #[allow(unused)]
+    https: Option<sui_http::ServerHandle>,
 }
