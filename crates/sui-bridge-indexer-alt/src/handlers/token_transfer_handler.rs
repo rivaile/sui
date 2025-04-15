@@ -39,8 +39,8 @@ pub struct TokenTransferHandler {
     claimed_event_type: StructTag,
 }
 
-impl TokenTransferHandler {
-    pub fn new() -> Self {
+impl Default for TokenTransferHandler {
+    fn default() -> Self {
         Self {
             deposited_event_type: StructTag {
                 address: BRIDGE_ADDRESS,

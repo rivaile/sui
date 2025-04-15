@@ -73,7 +73,7 @@ async fn main() -> Result<(), anyhow::Error> {
     .await?;
 
     indexer
-        .concurrent_pipeline(TokenTransferHandler::new(), Default::default())
+        .concurrent_pipeline(TokenTransferHandler::default(), Default::default())
         .await?;
 
     let h_indexer = indexer.run().await?;
