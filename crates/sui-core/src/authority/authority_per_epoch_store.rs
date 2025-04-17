@@ -89,6 +89,7 @@ use typed_store::Map;
 use super::authority_store_tables::ENV_VAR_LOCKS_BLOCK_CACHE_SIZE;
 use super::epoch_start_configuration::EpochStartConfigTrait;
 use super::execution_time_estimator::ExecutionTimeEstimator;
+use super::mysticeti_rejected_transactions::MysticetiRejectedTransactions;
 use super::shared_object_congestion_tracker::{
     CongestionPerObjectDebt, SharedObjectCongestionTracker,
 };
@@ -410,6 +411,8 @@ pub struct AuthorityPerEpochStore {
     tx_object_debts: OnceCell<mpsc::Sender<Vec<ObjectID>>>,
     // Saved at end of epoch for propagating observations to the next.
     end_of_epoch_execution_time_observations: OnceCell<StoredExecutionTimeObservations>,
+
+    pub(crate) mysticeti_rejected_transactions: Option<MysticetiRejectedTransactions>,
 }
 
 /// AuthorityEpochTables contains tables that contain data that is only valid within an epoch.
@@ -917,6 +920,12 @@ impl AuthorityPerEpochStore {
                 None
             };
 
+        let mysticeti_rejected_transactions = if protocol_config.mysticeti_fastpath() {
+            Some(MysticetiRejectedTransactions::new())
+        } else {
+            None
+        };
+
         let s = Arc::new(Self {
             name,
             committee: committee.clone(),
@@ -956,6 +965,7 @@ impl AuthorityPerEpochStore {
             tx_local_execution_time: OnceCell::new(),
             tx_object_debts: OnceCell::new(),
             end_of_epoch_execution_time_observations: OnceCell::new(),
+            mysticeti_rejected_transactions,
         });
 
         s.update_buffer_stake_metric();

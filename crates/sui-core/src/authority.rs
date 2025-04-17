@@ -222,6 +222,7 @@ pub mod authority_store_tables;
 pub mod authority_store_types;
 pub mod epoch_start_configuration;
 pub mod execution_time_estimator;
+pub mod mysticeti_rejected_transactions;
 pub mod shared_object_congestion_tracker;
 pub mod shared_object_version_manager;
 pub mod test_authority_builder;

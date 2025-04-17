@@ -15,26 +15,31 @@ use std::{
     io,
     net::{IpAddr, SocketAddr},
     sync::Arc,
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 use sui_network::{
     api::{Validator, ValidatorServer},
     tonic,
 };
-use sui_types::messages_grpc::{
-    HandleCertificateRequestV3, HandleCertificateResponseV3, RawSubmitTxResponse,
-};
-use sui_types::messages_grpc::{
-    HandleCertificateResponseV2, HandleTransactionResponse, ObjectInfoRequest, ObjectInfoResponse,
-    SubmitCertificateResponse, SystemStateRequest, TransactionInfoRequest, TransactionInfoResponse,
-};
-use sui_types::messages_grpc::{
-    HandleSoftBundleCertificatesRequestV3, HandleSoftBundleCertificatesResponseV3,
-};
 use sui_types::multiaddr::Multiaddr;
 use sui_types::sui_system_state::SuiSystemState;
 use sui_types::traffic_control::{ClientIdSource, PolicyConfig, RemoteFirewallConfig, Weight};
+use sui_types::{
+    effects::TransactionEffects,
+    messages_grpc::{
+        HandleCertificateRequestV3, HandleCertificateResponseV3, RawSubmitTxResponse,
+        RawWaitForEffectsRequest, RawWaitForEffectsResponse,
+    },
+};
 use sui_types::{effects::TransactionEffectsAPI, messages_grpc::SubmitTxResponse};
+use sui_types::{
+    effects::TransactionEvents,
+    messages_grpc::{
+        HandleCertificateResponseV2, HandleTransactionResponse, ObjectInfoRequest,
+        ObjectInfoResponse, SubmitCertificateResponse, SystemStateRequest, TransactionInfoRequest,
+        TransactionInfoResponse,
+    },
+};
 use sui_types::{error::*, transaction::*};
 use sui_types::{
     fp_ensure,
@@ -46,13 +51,21 @@ use sui_types::{
     messages_consensus::{ConsensusTransaction, ConsensusTransactionKind},
     messages_grpc::RawSubmitTxRequest,
 };
+use sui_types::{
+    messages_grpc::{
+        HandleSoftBundleCertificatesRequestV3, HandleSoftBundleCertificatesResponseV3,
+    },
+    object::Object,
+};
 use tap::TapFallible;
 use tonic::metadata::{Ascii, MetadataValue};
 use tracing::{error, error_span, info, Instrument};
 
 use crate::{
-    authority::authority_per_epoch_store::AuthorityPerEpochStore, checkpoints::CheckpointStore,
+    authority::authority_per_epoch_store::AuthorityPerEpochStore,
+    checkpoints::CheckpointStore,
     mysticeti_adapter::LazyMysticetiClient,
+    wait_for_effects_request::{WaitForEffectsRequest, WaitForEffectsResponse},
 };
 use crate::{
     authority::AuthorityState,
@@ -892,6 +905,37 @@ impl ValidatorService {
 
         Ok((Some(responses), Weight::zero()))
     }
+
+    async fn collect_effects_data(
+        &self,
+        effects: &TransactionEffects,
+        include_events: bool,
+        include_input_objects: bool,
+        include_output_objects: bool,
+    ) -> SuiResult<(Option<TransactionEvents>, Vec<Object>, Vec<Object>)> {
+        let events = if include_events && effects.events_digest().is_some() {
+            Some(
+                self.state
+                    .get_transaction_events(effects.transaction_digest())?,
+            )
+        } else {
+            None
+        };
+
+        let input_objects = if include_input_objects {
+            self.state.get_transaction_input_objects(effects)?
+        } else {
+            vec![]
+        };
+
+        let output_objects = if include_output_objects {
+            self.state.get_transaction_output_objects(effects)?
+        } else {
+            vec![]
+        };
+
+        Ok((events, input_objects, output_objects))
+    }
 }
 
 type WrappedServiceResponse<T> = Result<(tonic::Response<T>, Weight), tonic::Status>;
@@ -1008,6 +1052,56 @@ impl ValidatorService {
                 spam_weight,
             )
         })
+    }
+
+    async fn wait_for_effects_impl(
+        &self,
+        request: tonic::Request<RawWaitForEffectsRequest>,
+    ) -> WrappedServiceResponse<RawWaitForEffectsResponse> {
+        let epoch_store = self.state.load_epoch_store_one_call_per_task();
+        let Some(mysticeti_rejected_transactions) =
+            epoch_store.mysticeti_rejected_transactions.as_ref()
+        else {
+            return Err(SuiError::UnsupportedFeatureError {
+                error: "Mysticeti fastpath".to_string(),
+            }
+            .into());
+        };
+
+        // TODO: Add metrics.
+        let request: WaitForEffectsRequest = request.into_inner().try_into()?;
+        let transactions = [request.transaction_digest];
+        let effects = tokio::select! {
+            rejection_err = mysticeti_rejected_transactions.wait_for_rejection(request.transaction_position, Duration::from_secs(10)) => {
+                Err(rejection_err)
+            },
+            mut effects = self.state
+                .get_transaction_cache_reader()
+                .notify_read_executed_effects(&transactions) => {
+                Ok(effects.pop().unwrap())
+            },
+        }?;
+        let (events, input_objects, output_objects) = self
+            .collect_effects_data(
+                &effects,
+                request.include_events,
+                request.include_input_objects,
+                request.include_output_objects,
+            )
+            .await?;
+        let response = WaitForEffectsResponse {
+            effects,
+            events,
+            input_objects,
+            output_objects,
+        }
+        .try_into()
+        .map_err(|err: SuiError| SuiError::GrpcMessageSerdeError(err.to_string()))?;
+        Ok((
+            tonic::Response::new(response),
+            // TODO: Implement spam weight
+            Weight::zero(),
+        ))
     }
 
     async fn soft_bundle_validity_check(
@@ -1290,7 +1384,7 @@ impl ValidatorService {
                             let Some(client_ip) = header_contents.get(contents_len - num_hops)
                             else {
                                 error!(
-                                    "x-forwarded-for header value of {:?} contains {} values, but {} hops were specificed. \
+                                    "x-forwarded-for header value of {:?} contains {} values, but {} hops were specified. \
                                     Expected at least {} values. Skipping traffic controller request handling.",
                                     header_contents,
                                     contents_len,
@@ -1485,6 +1579,13 @@ impl Validator for ValidatorService {
         request: tonic::Request<HandleCertificateRequestV3>,
     ) -> Result<tonic::Response<HandleCertificateResponseV3>, tonic::Status> {
         handle_with_decoration!(self, handle_certificate_v3_impl, request)
+    }
+
+    async fn wait_for_effects(
+        &self,
+        request: tonic::Request<RawWaitForEffectsRequest>,
+    ) -> Result<tonic::Response<RawWaitForEffectsResponse>, tonic::Status> {
+        handle_with_decoration!(self, wait_for_effects_impl, request)
     }
 
     async fn handle_soft_bundle_certificates_v3(

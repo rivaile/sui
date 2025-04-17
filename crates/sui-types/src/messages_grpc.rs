@@ -185,7 +185,7 @@ pub struct SystemStateRequest {
     pub _unused: bool,
 }
 
-/// Response type for version 3 of the handle certifacte validator API.
+/// Response type for version 3 of the handle certificate validator API.
 ///
 /// The corresponding version 3 request type allows for a client to request events as well as
 /// input/output objects from a transaction's execution. Given Validators operate with very
@@ -393,6 +393,39 @@ impl SubmitTxResponse {
             },
         })
     }
+}
+
+#[derive(Clone, prost::Message)]
+pub struct RawWaitForEffectsRequest {
+    #[prost(bytes = "bytes", tag = "1")]
+    pub transaction_digest: Bytes,
+
+    #[prost(bytes = "bytes", tag = "2")]
+    pub transaction_position: Bytes,
+
+    #[prost(bool, tag = "3")]
+    pub include_events: bool,
+
+    #[prost(bool, tag = "4")]
+    pub include_input_objects: bool,
+
+    #[prost(bool, tag = "5")]
+    pub include_output_objects: bool,
+}
+
+#[derive(Clone, prost::Message)]
+pub struct RawWaitForEffectsResponse {
+    #[prost(bytes = "bytes", tag = "1")]
+    pub effects: Bytes,
+
+    #[prost(bytes = "bytes", optional, tag = "2")]
+    pub events: Option<Bytes>,
+
+    #[prost(bytes = "bytes", repeated, tag = "3")]
+    pub input_objects: Vec<Bytes>,
+
+    #[prost(bytes = "bytes", repeated, tag = "4")]
+    pub output_objects: Vec<Bytes>,
 }
 
 impl From<HandleCertificateResponseV3> for HandleCertificateResponseV2 {
