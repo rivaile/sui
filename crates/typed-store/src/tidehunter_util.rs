@@ -17,6 +17,7 @@ pub use tidehunter::{
     WalPosition,
 };
 use typed_store_error::TypedStoreError;
+use crate::DBMetrics;
 
 pub struct ThConfig {
     key_size: usize,
@@ -28,8 +29,7 @@ pub struct ThConfig {
 
 pub fn open(path: &Path, key_shape: KeyShape) -> Arc<Db> {
     std::fs::create_dir_all(path).expect("failed to open tidehunter db");
-    // TODO: fix metrics initialization
-    let metrics = Metrics::new_in(&Registry::default());
+    let metrics = Metrics::new_in(&DBMetrics::get().registry);
     let db = Db::open(path, key_shape, Arc::new(thdb_config()), metrics)
         .expect("failed to open tidehunter db");
     db.start_periodic_snapshot();
