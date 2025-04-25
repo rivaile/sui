@@ -9,6 +9,8 @@ use sui_indexer_alt_framework::types::SUI_BRIDGE_OBJECT_ID;
 pub mod token_transfer_data_handler;
 pub mod token_transfer_handler;
 
+pub mod governance_action_handler;
+
 const LIMITER: &IdentStr = ident_str!("limiter");
 const BRIDGE: &IdentStr = ident_str!("bridge");
 const COMMITTEE: &IdentStr = ident_str!("committee");
