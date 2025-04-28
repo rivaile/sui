@@ -57,7 +57,7 @@ use mysten_common::random_util::randomize_cache_capacity_in_tests;
 use mysten_common::sync::notify_read::NotifyRead;
 use parking_lot::Mutex;
 use prometheus::Registry;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::hash::Hash;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
@@ -77,7 +77,7 @@ use sui_types::message_envelope::Message;
 use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use sui_types::object::Object;
 use sui_types::storage::{
-    FullObjectKey, MarkerValue, ObjectKey, ObjectOrTombstone, ObjectStore, PackageObject,
+    FullObjectKey, InputKey, MarkerValue, ObjectKey, ObjectOrTombstone, ObjectStore, PackageObject,
 };
 use sui_types::sui_system_state::{get_sui_system_state, SuiSystemState};
 use sui_types::transaction::{VerifiedSignedTransaction, VerifiedTransaction};
@@ -194,7 +194,7 @@ impl IsNewer for LatestObjectCacheEntry {
 
 type MarkerKey = (EpochId, FullObjectID);
 
-/// UncommitedData stores execution outputs that are not yet written to the db. Entries in this
+/// UncommittedData stores execution outputs that are not yet written to the db. Entries in this
 /// struct can only be purged after they are committed.
 struct UncommittedData {
     /// The object dirty set. All writes go into this table first. After we flush the data to the
@@ -426,6 +426,7 @@ pub struct WritebackCache {
     object_locks: ObjectLocks,
 
     executed_effects_digests_notify_read: NotifyRead<TransactionDigest, TransactionEffectsDigest>,
+    object_notify_read: NotifyRead<InputKey, ()>,
     store: Arc<AuthorityStore>,
     backpressure_threshold: u64,
     backpressure_manager: Arc<BackpressureManager>,
@@ -487,6 +488,7 @@ impl WritebackCache {
             packages,
             object_locks: ObjectLocks::new(),
             executed_effects_digests_notify_read: NotifyRead::new(),
+            object_notify_read: NotifyRead::new(),
             store,
             backpressure_manager,
             backpressure_threshold: config.backpressure_threshold(),
@@ -862,6 +864,19 @@ impl WritebackCache {
         // Update all markers
         for (object_key, marker_value) in markers.iter() {
             self.write_marker_value(epoch_id, *object_key, *marker_value);
+            // It is possible for a transaction to use a consensus stream ended
+            // object in the input, hence we must notify that it is now available
+            // at the assigned version, so that any transaction waiting for this
+            // object version can start execution.
+            if matches!(marker_value, MarkerValue::ConsensusStreamEnded(_)) {
+                self.object_notify_read.notify(
+                    &InputKey::VersionedObject {
+                        id: object_key.id(),
+                        version: object_key.version(),
+                    },
+                    &(),
+                );
+            }
         }
 
         // Write children before parents to ensure that readers do not observe a parent object
@@ -878,6 +893,16 @@ impl WritebackCache {
                     debug!("caching package: {:?}", object.compute_object_reference());
                     self.packages
                         .insert(*object_id, PackageObject::new(object.clone()));
+                    self.object_notify_read
+                        .notify(&InputKey::Package { id: *object_id }, &());
+                } else {
+                    self.object_notify_read.notify(
+                        &InputKey::VersionedObject {
+                            id: object.full_id(),
+                            version: object.version(),
+                        },
+                        &(),
+                    );
                 }
             }
         }
@@ -944,7 +969,7 @@ impl WritebackCache {
                 // This can happen in the following rare case:
                 // All transactions in the checkpoint are committed to the db (by commit_transaction_outputs,
                 // called in CheckpointExecutor::process_executed_transactions), but the process crashes before
-                // the checkpoint water mark is bumped. We will then re-commit thhe checkpoint at startup,
+                // the checkpoint water mark is bumped. We will then re-commit the checkpoint at startup,
                 // despite that all transactions are already executed.
                 warn!("Attempt to commit unknown transaction {:?}", tx);
                 continue;
@@ -1219,7 +1244,7 @@ impl WritebackCache {
     fn revert_state_update_impl(&self, tx: &TransactionDigest) {
         // TODO: remove revert_state_update_impl entirely, and simply drop all dirty
         // state when clear_state_end_of_epoch_impl is called.
-        // Futher, once we do this, we can delay the insertion of the transaction into
+        // Further, once we do this, we can delay the insertion of the transaction into
         // pending_consensus_transactions until after the transaction has executed.
         let Some((_, outputs)) = self.dirty.pending_transaction_writes.remove(tx) else {
             assert!(
@@ -1764,6 +1789,86 @@ impl ObjectCacheRead for WritebackCache {
             .perpetual_tables
             .get_highest_pruned_checkpoint()
             .expect("db error")
+    }
+
+    fn notify_read_input_objects<'a>(
+        &'a self,
+        input_and_receiving_keys: &'a [InputKey],
+        receiving_keys: &'a HashSet<InputKey>,
+        epoch: &'a EpochId,
+    ) -> BoxFuture<'a, Vec<()>> {
+        self.object_notify_read
+            .read(input_and_receiving_keys, |keys| {
+                let mut results = vec![None; keys.len()];
+
+                let (keys_with_version, keys_without_version): (Vec<_>, Vec<_>) = keys
+                    .iter()
+                    .enumerate()
+                    .filter(|(idx, key)| {
+                        if key.is_cancelled() {
+                            // Shared objects in canceled transactions are always available.
+                            results[*idx] = Some(());
+                            false
+                        } else {
+                            true
+                        }
+                    })
+                    .partition(|(_, key)| key.version().is_some());
+                let versioned_object_keys: Vec<_> = keys_with_version
+                    .iter()
+                    .map(|(_, key)| ObjectKey(key.id().id(), key.version().unwrap()))
+                    .collect();
+                ObjectCacheRead::multi_get_objects_by_key(self, &versioned_object_keys)
+                    .into_iter()
+                    .zip(keys_with_version.iter())
+                    .for_each(|(o, (idx, input_key))| match o {
+                        Some(_) => results[*idx] = Some(()),
+                        None => {
+                            if receiving_keys.contains(input_key) {
+                                // There could be a more recent version of this object, and the object at the
+                                // specified version could have already been pruned. In such a case `has_key` will
+                                // be false, but since this is a receiving object we should mark it as available if
+                                // we can determine that an object with a version greater than or equal to the
+                                // specified version exists or was deleted. We will then let mark it as available
+                                // to let the transaction through so it can fail at execution.
+                                let is_available =
+                                    ObjectCacheRead::get_object(self, &input_key.id().id())
+                                        .map(|obj| obj.version() >= input_key.version().unwrap())
+                                        .unwrap_or(false)
+                                        || self.fastpath_stream_ended_at_version_or_after(
+                                            input_key.id().id(),
+                                            input_key.version().unwrap(),
+                                            *epoch,
+                                        );
+                                if is_available {
+                                    results[*idx] = Some(());
+                                }
+                            } else if self
+                                .get_consensus_stream_end_tx_digest(
+                                    FullObjectKey::new(
+                                        input_key.id(),
+                                        input_key.version().unwrap(),
+                                    ),
+                                    *epoch,
+                                )
+                                .is_some()
+                            {
+                                // If the object is an already-removed consensus object, mark it as available if the
+                                // version for that object is in the marker table.
+                                results[*idx] = Some(());
+                            }
+                        }
+                    });
+                keys_without_version.iter().for_each(|(idx, key)| {
+                    // unwrap is safe since this only errors when the object is not a package,
+                    // which is impossible if we have a certificate for execution.
+                    if self.get_package_object(&key.id().id()).unwrap().is_some() {
+                        results[*idx] = Some(());
+                    }
+                });
+                results
+            })
+            .boxed()
     }
 }
 

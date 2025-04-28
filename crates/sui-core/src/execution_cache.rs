@@ -261,7 +261,7 @@ pub trait ObjectCacheRead: Send + Sync {
         ) {
             assert!(
                 input_key.version().is_none() || input_key.version().unwrap().is_valid(),
-                "Shared objects in cancelled transaction should always be available immediately, 
+                "Shared objects in cancelled transaction should always be available immediately,
                  but it appears that transaction manager is waiting for {:?} to become available",
                 input_key
             );
@@ -397,7 +397,7 @@ pub trait ObjectCacheRead: Send + Sync {
         version: SequenceNumber,
         epoch_id: EpochId,
     ) -> bool {
-        let full_id = FullObjectID::Fastpath(object_id); // function explicilty assumes "fastpath"
+        let full_id = FullObjectID::Fastpath(object_id); // function explicitly assumes "fastpath"
         matches!(
             self.get_latest_marker(full_id, epoch_id),
             Some((marker_version, MarkerValue::FastpathStreamEnded)) if marker_version >= version
@@ -406,6 +406,18 @@ pub trait ObjectCacheRead: Send + Sync {
 
     /// Return the watermark for the highest checkpoint for which we've pruned objects.
     fn get_highest_pruned_checkpoint(&self) -> Option<CheckpointSequenceNumber>;
+
+    /// Given a list of input and receiving objects for a transaction,
+    /// wait until all of them become available, so that the transaction
+    /// can start execution.
+    /// `input_and_receiving_keys` contains both input objects and receiving
+    /// input objects, including canceled objects.
+    fn notify_read_input_objects<'a>(
+        &'a self,
+        input_and_receiving_keys: &'a [InputKey],
+        receiving_keys: &'a HashSet<InputKey>,
+        epoch: &'a EpochId,
+    ) -> BoxFuture<'a, Vec<()>>;
 }
 
 pub trait TransactionCacheRead: Send + Sync {
