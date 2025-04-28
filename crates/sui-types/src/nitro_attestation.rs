@@ -12,6 +12,7 @@ use x509_parser::x509::SubjectPublicKeyInfo;
 use crate::error::{SuiError, SuiResult};
 
 use ciborium::value::{Integer, Value};
+use itertools::Itertools;
 use once_cell::sync::Lazy;
 use p384::ecdsa::signature::Verifier;
 use p384::ecdsa::{Signature, VerifyingKey};
@@ -398,7 +399,7 @@ pub struct AttestationDocument {
     pub module_id: String,
     pub timestamp: u64,
     pub digest: String,
-    pub pcrs: Vec<Vec<u8>>,
+    pub pcrs: HashMap<u8, Vec<u8>>,
     certificate: Vec<u8>,
     cabundle: Vec<Vec<u8>>,
     pub public_key: Option<Vec<u8>>,
@@ -563,7 +564,7 @@ impl AttestationDocument {
                         "invalid PCRs length".to_string(),
                     ));
                 }
-                let mut pcr_vec = Vec::with_capacity(pairs.len());
+                let mut pcr_map = HashMap::new();
                 for (k, v) in pairs.iter() {
                     let key = k.as_integer().ok_or(
                         NitroAttestationVerifyError::InvalidAttestationDoc(
@@ -582,20 +583,29 @@ impl AttestationDocument {
                         ));
                     }
 
-                    // Valid PCR indices are 0, 1, 2, 3, 4, 8 for AWS.
-                    // See: <https://docs.aws.amazon.com/enclaves/latest/user/set-up-attestation.html#where>
-                    let key_u64 = u64::try_from(key).map_err(|_| {
+                    // valid key is at most 32.
+                    let key_u8 = u8::try_from(key).map_err(|_| {
                         NitroAttestationVerifyError::InvalidAttestationDoc(
                             "invalid PCR index".to_string(),
                         )
                     })?;
-                    for i in [0, 1, 2, 3, 4, 8] {
-                        if key_u64 == i {
-                            pcr_vec.push(value.to_vec());
-                        }
+
+                    // Valid PCR indices are 0, 1, 2, 3, 4, 8 for AWS.
+                    // See: <https://docs.aws.amazon.com/enclaves/latest/user/set-up-attestation.html#where>
+                    if !matches!(key_u8, 0 | 1 | 2 | 3 | 4 | 8) {
+                        continue;
                     }
+
+                    if pcr_map.contains_key(&key_u8) {
+                        return Err(NitroAttestationVerifyError::InvalidAttestationDoc(format!(
+                            "duplicate PCR index {}",
+                            key_u8
+                        )));
+                    }
+
+                    pcr_map.insert(key_u8, value.to_vec());
                 }
-                Ok(pcr_vec)
+                Ok(pcr_map)
             })?;
 
         let cabundle = document_map
@@ -767,4 +777,10 @@ fn verify_cert_chain(cert_chain: &[&[u8]], now_ms: u64) -> Result<(), NitroAttes
     }
 
     Ok(())
+}
+
+fn to_indexed_struct(pcrs: HashMap<u8, Vec<u8>>) -> Vec<(u8, Vec<u8>)> {
+    let mut sorted: Vec<_> = pcrs.into_iter().collect();
+    sorted.sort_by_key(|(k, _)| *k);
+    sorted
 }

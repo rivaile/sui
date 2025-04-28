@@ -1,8 +1,8 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use move_binary_format::errors::{PartialVMError, PartialVMResult};
-use move_core_types::{gas_algebra::InternalGas, vm_status::StatusCode};
+use move_binary_format::errors::PartialVMResult;
+use move_core_types::gas_algebra::InternalGas;
 use move_vm_runtime::native_functions::NativeContext;
 use move_vm_types::{
     loaded_data::runtime_types::Type,
@@ -10,7 +10,7 @@ use move_vm_types::{
     pop_arg,
     values::{Struct, Value, Vector, VectorRef},
 };
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use sui_types::nitro_attestation::{parse_nitro_attestation, verify_nitro_attestation};
 
 use crate::{object_runtime::ObjectRuntime, NativesCostTable};
@@ -19,7 +19,6 @@ use move_vm_runtime::native_charge_gas_early_exit;
 pub const NOT_SUPPORTED_ERROR: u64 = 0;
 pub const PARSE_ERROR: u64 = 1;
 pub const VERIFY_ERROR: u64 = 2;
-pub const INVALID_PCRS_ERROR: u64 = 3;
 
 // Gas related structs and functions.
 #[derive(Clone)]
@@ -133,18 +132,16 @@ fn to_option_vector_u8(value: Option<Vec<u8>>) -> PartialVMResult<Value> {
     }
 }
 
-// Convert a list of PCRs into a vector of PCREntry struct with index and value,
-// where the indices are [0, 1, 2, 3, 4, 8] since AWS currently supports PCR0,
-// PCR1, PCR2, PCR3, PCR4, PCR8.
-fn to_indexed_struct(pcrs: Vec<Vec<u8>>) -> PartialVMResult<Value> {
-    let indices = [0, 1, 2, 3, 4, 8];
-    if pcrs.len() != indices.len() {
-        return Err(PartialVMError::new(StatusCode::ABORTED).with_sub_status(INVALID_PCRS_ERROR));
-    };
+// Convert a map of index -> PCR to a vector of PCREntry struct with index
+// and value where the indices are [0, 1, 2, 3, 4, 8] since AWS currently
+// supports PCR0, PCR1, PCR2, PCR3, PCR4, PCR8.
+fn to_indexed_struct(pcrs: HashMap<u8, Vec<u8>>) -> PartialVMResult<Value> {
+    let mut sorted = pcrs.iter().collect::<Vec<_>>();
+    sorted.sort_by_key(|(key, _)| *key);
     let mut indexed_struct = vec![];
-    for (index, pcr) in pcrs.iter().enumerate() {
+    for (index, pcr) in sorted.into_iter() {
         indexed_struct.push(Value::struct_(Struct::pack(vec![
-            Value::u8(indices[index]),
+            Value::u8(*index),
             Value::vector_u8(pcr.to_vec()),
         ])));
     }
