@@ -46,7 +46,7 @@ use crate::authority::authority_per_epoch_store::AuthorityPerEpochStore;
 use crate::authority::backpressure::BackpressureManager;
 use crate::authority::AuthorityState;
 use crate::state_accumulator::StateAccumulator;
-use crate::transaction_manager::TransactionManager;
+use crate::transaction_manager_v2::TransactionManagerV2;
 use crate::{
     checkpoints::CheckpointStore,
     execution_cache::{ObjectCacheRead, TransactionCacheRead},
@@ -120,7 +120,7 @@ pub struct CheckpointExecutor {
     checkpoint_store: Arc<CheckpointStore>,
     object_cache_reader: Arc<dyn ObjectCacheRead>,
     transaction_cache_reader: Arc<dyn TransactionCacheRead>,
-    tx_manager: Arc<TransactionManager>,
+    tx_manager: Arc<TransactionManagerV2>,
     accumulator: Arc<StateAccumulator>,
     backpressure_manager: Arc<BackpressureManager>,
     config: CheckpointExecutorConfig,

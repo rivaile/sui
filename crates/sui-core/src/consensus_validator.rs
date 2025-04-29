@@ -20,6 +20,7 @@ use crate::{
     checkpoints::CheckpointServiceNotify,
     consensus_adapter::ConsensusOverloadChecker,
     transaction_manager::TransactionManager,
+    transaction_manager_v2::TransactionManagerV2,
 };
 
 /// Allows verifying the validity of transactions
@@ -28,7 +29,7 @@ pub struct SuiTxValidator {
     authority_state: Arc<AuthorityState>,
     consensus_overload_checker: Arc<dyn ConsensusOverloadChecker>,
     checkpoint_service: Arc<dyn CheckpointServiceNotify + Send + Sync>,
-    _transaction_manager: Arc<TransactionManager>,
+    _transaction_manager: Arc<TransactionManagerV2>,
     metrics: Arc<SuiTxValidatorMetrics>,
 }
 
@@ -37,7 +38,7 @@ impl SuiTxValidator {
         authority_state: Arc<AuthorityState>,
         consensus_overload_checker: Arc<dyn ConsensusOverloadChecker>,
         checkpoint_service: Arc<dyn CheckpointServiceNotify + Send + Sync>,
-        transaction_manager: Arc<TransactionManager>,
+        transaction_manager: Arc<TransactionManagerV2>,
         metrics: Arc<SuiTxValidatorMetrics>,
     ) -> Self {
         let epoch_store = authority_state.load_epoch_store_one_call_per_task().clone();
