@@ -30,7 +30,8 @@ use super::{pin, DependencySet, ManifestDependencyInfo, PinnedDependencyInfo};
 
 pub type ResolverName = String;
 
-const RESOLVE_ARG: &str = "--resolve-deps";
+pub const RESOLVE_ARG: &str = "--resolve-deps";
+pub const RESOLVE_METHOD: &str = "resolve";
 
 /// An external dependency has the form `{ r.<res> = <data> }`. External
 /// dependencies are resolved by external resolvers.
@@ -52,7 +53,7 @@ struct RField {
 
 /// Requests from the package mananger to the external resolver
 #[derive(Serialize)]
-struct Request<F: MoveFlavor> {
+struct ResolveRequest<F: MoveFlavor> {
     #[serde(default)]
     env: Option<F::EnvironmentID>,
     data: toml::Value,
@@ -61,7 +62,7 @@ struct Request<F: MoveFlavor> {
 /// Responses from the external resolver back to the package manager
 #[derive(Deserialize)]
 #[serde(bound = "")]
-struct Response<F: MoveFlavor> {
+struct ResolveResponse<F: MoveFlavor> {
     result: ManifestDependencyInfo<F>,
     warnings: Vec<String>,
 }
@@ -83,7 +84,8 @@ impl ExternalDependency {
         deps.explode(envs.keys().cloned());
 
         // iterate over [deps] to collect queries for external resolvers
-        let mut requests: BTreeMap<ResolverName, DependencySet<Request<F>>> = BTreeMap::new();
+        let mut requests: BTreeMap<ResolverName, DependencySet<ResolveRequest<F>>> =
+            BTreeMap::new();
 
         for (env, pkg, dep) in deps.iter() {
             if let ManifestDependencyInfo::External::<F>(dep) = dep {
@@ -95,7 +97,7 @@ impl ExternalDependency {
                 requests.entry(dep.resolver.clone()).or_default().insert(
                     env.cloned(),
                     pkg.clone(),
-                    Request {
+                    ResolveRequest {
                         env: env_id,
                         data: dep.data.clone(),
                     },
@@ -152,7 +154,7 @@ impl From<ExternalDependency> for RField {
 /// returned dependency set contains no externally resolved dependencies.
 async fn resolve_single<F: MoveFlavor>(
     resolver: ResolverName,
-    requests: DependencySet<Request<F>>,
+    requests: DependencySet<ResolveRequest<F>>,
 ) -> PackageResult<DependencySet<ManifestDependencyInfo<F>>> {
     let mut child = Command::new(&resolver)
         .arg(RESOLVE_ARG)

@@ -10,5 +10,5 @@
 pub mod dependency;
 pub mod errors;
 pub mod flavor;
-mod jsonrpc;
+pub mod jsonrpc;
 pub mod package;
