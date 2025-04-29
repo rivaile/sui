@@ -15,7 +15,7 @@ use serde::{
 };
 use serde_spanned::Spanned;
 use tokio::{io::AsyncReadExt, process::Command};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
     errors::{
@@ -83,6 +83,8 @@ impl ExternalDependency {
         // we explode [deps] first so that we know exactly which deps are needed for each env.
         deps.explode(envs.keys().cloned());
 
+        debug!("foo");
+
         // iterate over [deps] to collect queries for external resolvers
         let mut requests: BTreeMap<ResolverName, DependencySet<ResolveRequest<F>>> =
             BTreeMap::new();
@@ -104,6 +106,8 @@ impl ExternalDependency {
                 );
             }
         }
+
+        debug!("{requests:?}");
 
         // call the resolvers
         let responses = DependencySet::merge(

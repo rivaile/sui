@@ -15,9 +15,7 @@ use std::{
 
 use move_package_alt::{
     dependency::external::{RESOLVE_ARG, RESOLVE_METHOD},
-    jsonrpc::types::{
-        BatchRequest, BatchResponse, JsonRpcResult, RequestID, Response, TwoPointZero,
-    },
+    jsonrpc::types::{BatchRequest, JsonRpcResult, RequestID, Response, TwoPointZero},
 };
 use serde::Deserialize;
 use tracing::debug;
@@ -79,10 +77,9 @@ pub fn main() {
         .map(|(id, request)| process_request(id, request))
         .collect();
 
-    let response = BatchResponse::<serde_json::Value> { responses };
     println!(
         "{}",
-        serde_json::to_string(&response).expect("response can be serialized")
+        serde_json::to_string(&responses).expect("response can be serialized")
     );
 }
 
@@ -95,7 +92,6 @@ fn parse_input() -> BTreeMap<RequestID, ResolveRequest> {
         .expect("External resolver must be passed a JSON RPC batch request");
 
     batch
-        .requests
         .into_iter()
         .map(|req| {
             assert!(req.method == RESOLVE_METHOD);
