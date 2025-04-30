@@ -7,7 +7,7 @@
 use std::{collections::BTreeMap, fmt::Debug, io::BufRead, iter::once, path::Path, process::Stdio};
 
 use anyhow::bail;
-use futures::future::try_join_all;
+use futures::future::{join_all, try_join_all};
 use itertools::{izip, Itertools};
 use serde::{
     de::{MapAccess, Visitor},
@@ -52,7 +52,7 @@ struct RField {
 }
 
 /// Requests from the package mananger to the external resolver
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 struct ResolveRequest<F: MoveFlavor> {
     #[serde(default)]
     env: Option<F::EnvironmentID>,
@@ -83,8 +83,6 @@ impl ExternalDependency {
         // we explode [deps] first so that we know exactly which deps are needed for each env.
         deps.explode(envs.keys().cloned());
 
-        debug!("foo");
-
         // iterate over [deps] to collect queries for external resolvers
         let mut requests: BTreeMap<ResolverName, DependencySet<ResolveRequest<F>>> =
             BTreeMap::new();
@@ -107,14 +105,12 @@ impl ExternalDependency {
             }
         }
 
-        debug!("{requests:?}");
-
         // call the resolvers
         let responses = DependencySet::merge(
             try_join_all(
                 requests
                     .into_iter()
-                    .map(|(resolver, reqs)| resolve_single(resolver, reqs)),
+                    .map(async |(resolver, reqs)| resolve_single(resolver, reqs).await),
             )
             .await?,
         );
@@ -123,6 +119,8 @@ impl ExternalDependency {
         for (env, pkg, dep) in responses.into_iter() {
             deps.insert(env, pkg, dep);
         }
+
+        debug!("done resolving");
 
         Ok(())
     }
@@ -175,27 +173,30 @@ async fn resolve_single<F: MoveFlavor>(
 
     let (envs, pkgs, reqs): (Vec<_>, Vec<_>, Vec<_>) = requests.into_iter().multiunzip();
 
+    debug!(
+        "requests for {resolver}:\n{}",
+        serde_json::to_string_pretty(&reqs).unwrap_or("serialization error".to_string())
+    );
+
     let resps = endpoint
         .batch_call("resolve", reqs)
         .await
-        .map_err(|_| ResolverError::bad_resolver(&resolver, "external resolver failed"))?;
-
-    let result: DependencySet<ManifestDependencyInfo<F>> = izip!(envs, pkgs, resps).collect();
+        .map_err(|e| ResolverError::bad_resolver(&resolver, e.to_string()));
 
     // dump standard error
-    let mut stderr: Vec<u8> = Vec::new();
-    child
-        .stderr
-        .take()
-        .expect("stderr is available")
-        .read_to_end(&mut stderr);
+    let output = child.wait_with_output().await?;
 
-    if !stderr.is_empty() {
-        info!("Output from {resolver}:");
-        for line in stderr.lines() {
-            info!("  │ {}", line.expect("reading from byte array can't fail"));
-        }
+    if !output.stderr.is_empty() {
+        info!(
+            "Output from {resolver}:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .map(|l| format!("  │ {l}\n"))
+                .join("")
+        )
     }
+
+    let result: DependencySet<ManifestDependencyInfo<F>> = izip!(envs, pkgs, resps?).collect();
 
     // ensure no externally resolved responses
     for (_, _, dep) in result.iter() {

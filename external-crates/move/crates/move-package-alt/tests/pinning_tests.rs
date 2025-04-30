@@ -16,7 +16,6 @@ async fn run_pinning_tests(input_path: &Path) -> datatest_stable::Result<()> {
     tracing_subscriber::fmt::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .without_time()
-        .with_target(false)
         .init();
     let manifest = Manifest::<Vanilla>::read_from(input_path).unwrap();
 
