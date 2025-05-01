@@ -43,3 +43,6 @@ harness = false
 [[test]]
 name = "pinning_tests"
 harness = false
+
+[[test]]
+name = "jsonrpc_tests"
