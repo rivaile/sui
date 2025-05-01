@@ -29,6 +29,7 @@ const ALLOWED_EDITIONS: &[&str] = &["2024", "2024.beta", "legacy"];
 #[serde(bound = "")]
 pub struct Manifest<F: MoveFlavor> {
     package: PackageMetadata<F>,
+    #[serde(default)]
     pub environments: BTreeMap<EnvironmentName, F::EnvironmentID>,
     #[serde(default)]
     pub dependencies: BTreeMap<PackageName, ManifestDependency<F>>,
