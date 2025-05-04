@@ -43,6 +43,9 @@ pub mod traffic_controller;
 pub mod transaction_driver;
 mod transaction_input_loader;
 mod transaction_manager;
+mod tx_handler;
+mod cache_update_handler;
+
 pub mod transaction_orchestrator;
 mod transaction_outputs;
 pub mod validator_tx_finalizer;
