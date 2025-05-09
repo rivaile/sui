@@ -351,6 +351,20 @@ pub fn derive_dbmap_utils_general(input: TokenStream) -> TokenStream {
                 ) -> #secondary_db_map_struct_name #generics {
                 #secondary_db_map_struct_name::open_tables_read_only(primary_path, with_secondary_path, metric_conf, global_db_options_override)
             }
+
+
+            pub fn get_rw_handle_readonly_inner (
+                primary_path: std::path::PathBuf,
+                metric_conf: typed_store::rocks::MetricConf,
+            ) -> Self {
+                let inner = #intermediate_db_map_struct_name::open_tables_read_only_as_rw_impl(primary_path, metric_conf);
+                Self {
+                    #(
+                        #field_names: inner.#field_names,
+                    )*
+                }
+            }
+
         }
 
 

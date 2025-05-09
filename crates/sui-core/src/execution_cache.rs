@@ -565,6 +565,11 @@ pub trait ExecutionCacheWrite: Send + Sync {
         tx_digest: TransactionDigest,
         signed_transaction: Option<VerifiedSignedTransaction>,
     ) -> SuiResult;
+
+    fn reload_objects(&self, objects: Vec<(ObjectID, Object)>);
+
+    fn update_underlying(&self, clear_cache: bool);
+
 }
 
 pub trait CheckpointCache: Send + Sync {

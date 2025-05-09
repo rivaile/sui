@@ -1272,6 +1272,17 @@ impl WritebackCache {
         self.packages.invalidate_all();
         assert_empty(&self.packages);
     }
+
+    pub fn reload_cached(&self, objects: Vec<(ObjectID, Object)>) {
+        for (object_id, object) in objects {
+            let _ = self.cached.object_by_id_cache.insert(
+                &object_id,
+                LatestObjectCacheEntry::Object(object.version(), object.into()),
+                Ticket::Write,
+            );
+        }
+    }
+
 }
 
 impl ExecutionCacheAPI for WritebackCache {}
@@ -2042,6 +2053,25 @@ impl TransactionCacheRead for WritebackCache {
 }
 
 impl ExecutionCacheWrite for WritebackCache {
+
+    fn update_underlying(&self, clear_cache: bool) {
+        self.store
+            .perpetual_tables
+            .objects
+            .rocksdb
+            .try_catch_up_with_primary()
+            .unwrap();
+
+        if clear_cache {
+            self.clear();
+        }
+    }
+
+    fn reload_objects(&self, objects: Vec<(ObjectID, Object)>) {
+        self.reload_cached(objects);
+    }
+
+    
     fn acquire_transaction_locks(
         &self,
         epoch_store: &AuthorityPerEpochStore,
