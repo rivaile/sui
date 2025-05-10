@@ -232,7 +232,7 @@ pub mod shared_object_version_manager;
 pub mod test_authority_builder;
 pub mod transaction_deferral;
 
-pub(crate) mod authority_store;
+pub mod authority_store;
 pub mod backpressure;
 
 use dashmap::DashSet;
