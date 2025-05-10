@@ -229,6 +229,35 @@ pub fn derive_dbmap_utils_general(input: TokenStream) -> TokenStream {
                     #generics_names: #generics_bounds_token,
                 )*
             > #intermediate_db_map_struct_name #generics {
+
+            /// Opens the tables in read-only mode but returns an instance of the original struct.
+            /// All write operations will fail at runtime.
+            #[allow(unused_parens)]
+            pub fn open_tables_read_only_as_rw_impl(
+                path: std::path::PathBuf,
+                metric_conf: typed_store::rocks::MetricConf,
+            ) -> Self {
+                let p: std::path::PathBuf = tempfile::tempdir()
+                    .expect("Failed to open temporary directory")
+                    .into_path();
+
+                let inner = Self::open_tables_impl(
+                    path,
+                    Some(p),
+                    
+                    metric_conf,
+                    None,
+                    None,
+                    false,
+                );
+                Self {
+                    #(
+                        #field_names: inner.#field_names,
+                    )*
+                }
+            }
+
+
             /// Opens a set of tables in read-write mode
             /// If as_secondary_with_path is set, the DB is opened in read only mode with the path specified
             pub fn open_tables_impl(
