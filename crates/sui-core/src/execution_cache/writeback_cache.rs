@@ -94,6 +94,8 @@ use super::{
     ExecutionCacheWrite, ObjectCacheRead, StateSyncAPI, TestingAPI, TransactionCacheRead,
 };
 
+use typed_store::traits::Map;
+
 #[cfg(test)]
 #[path = "unit_tests/writeback_cache_tests.rs"]
 pub mod writeback_cache_tests;
@@ -395,6 +397,18 @@ impl CachedCommittedData {
         assert!(self.executed_effects_digests.is_empty());
         assert_empty(&self._transaction_objects);
     }
+
+    fn clear(&self) {
+        self.object_cache.invalidate_all();
+        self.object_by_id_cache.invalidate_all();
+        self.marker_cache.invalidate_all();
+        self.transactions.invalidate_all();
+        self.transaction_effects.invalidate_all();
+        self.transaction_events.invalidate_all();
+        self.executed_effects_digests.invalidate_all();
+        self._transaction_objects.invalidate_all();
+    }
+
 }
 
 fn assert_empty<K, V>(cache: &MokaCache<K, V>)
@@ -2058,7 +2072,7 @@ impl ExecutionCacheWrite for WritebackCache {
         self.store
             .perpetual_tables
             .objects
-            .rocksdb
+            // .db
             .try_catch_up_with_primary()
             .unwrap();
 
@@ -2071,7 +2085,11 @@ impl ExecutionCacheWrite for WritebackCache {
         self.reload_cached(objects);
     }
 
-    
+    fn clear(&self) {
+        self.cached.clear();
+    }
+
+
     fn acquire_transaction_locks(
         &self,
         epoch_store: &AuthorityPerEpochStore,

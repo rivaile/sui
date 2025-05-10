@@ -570,6 +570,8 @@ pub trait ExecutionCacheWrite: Send + Sync {
 
     fn update_underlying(&self, clear_cache: bool);
 
+    fn clear(&self);
+
 }
 
 pub trait CheckpointCache: Send + Sync {
