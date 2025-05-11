@@ -48,6 +48,8 @@ impl CacheUpdateHandler {
 
         let listener = UnixListener::bind(&socket_path).expect("Failed to bind Unix socket");
 
+        info!("create sui_cache_updates.sock end");
+
         let connections = Arc::new(Mutex::new(Vec::new()));
         let running = Arc::new(AtomicBool::new(true));
 
