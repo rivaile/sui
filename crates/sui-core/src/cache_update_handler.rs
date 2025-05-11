@@ -125,6 +125,8 @@ impl Default for CacheUpdateHandler {
 impl Drop for CacheUpdateHandler {
     fn drop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
-        let _ = std::fs::remove_file(&self.socket_path);
+        info!("CacheUpdateHandler Drop");
+        // let _ = std::fs::remove_file(&self.socket_path);
+        
     }
 }
