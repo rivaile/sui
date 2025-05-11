@@ -39,6 +39,9 @@ pub struct CacheUpdateHandler {
 
 impl CacheUpdateHandler {
     pub fn new() -> Self {
+        
+        info!("create sui_cache_updates.sock start");
+
         let socket_path = PathBuf::from(SOCKET_PATH);
         // Remove existing socket file if it exists
         let _ = std::fs::remove_file(&socket_path);

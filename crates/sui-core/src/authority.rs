@@ -3068,6 +3068,7 @@ impl AuthorityState {
         let input_loader =
             TransactionInputLoader::new(execution_cache_trait_pointers.object_cache_reader.clone());
         let epoch = epoch_store.epoch();
+        info!("create new AuthorityState start");
         let state = Arc::new(AuthorityState {
             name,
             secret,
@@ -3096,6 +3097,8 @@ impl AuthorityState {
             pool_related_ids: pool_related_object_ids(),
 
         });
+
+        info!("create new AuthorityState end");
 
         let state_clone = Arc::downgrade(&state);
         spawn_monitored_task!(fix_indexes(state_clone));
