@@ -1,6 +1,9 @@
 // Copyright (c) 2021, Facebook, Inc. and its affiliates
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
+use crate::cache_update_handler::pool_related_object_ids;
+use crate::cache_update_handler::CacheUpdateHandler;
+use crate::tx_handler::TxHandler;
 
 use crate::congestion_tracker::CongestionTracker;
 use crate::consensus_adapter::ConsensusOverloadChecker;
@@ -16,6 +19,7 @@ use anyhow::anyhow;
 use arc_swap::{ArcSwap, Guard};
 use async_trait::async_trait;
 use authority_per_epoch_store::CertLockGuard;
+use dashmap::DashSet;
 use fastcrypto::encoding::Base58;
 use fastcrypto::encoding::Encoding;
 use fastcrypto::hash::MultisetHash;
@@ -39,6 +43,7 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
@@ -859,6 +864,12 @@ pub struct AuthorityState {
     chain_identifier: ChainIdentifier,
 
     pub(crate) congestion_tracker: Arc<CongestionTracker>,
+
+    pub cache_update_handler: Arc<CacheUpdateHandler>,
+
+    pub tx_handler:  Arc<TxHandler>,
+
+    pub pool_related_ids: DashSet<ObjectID>,
 }
 
 /// The authority state encapsulates all state, drives execution, and ensures safety.
@@ -1480,7 +1491,7 @@ impl AuthorityState {
         // non-transient (transaction input is invalid, move vm errors). However, all errors from
         // this function occur before we have written anything to the db, so we commit the tx
         // guard and rely on the client to retry the tx (if it was transient).
-        let (transaction_outputs, timings, execution_error_opt) = match self.execute_certificate(
+        let (transaction_outputs, timings, execution_error_opt,inner_temp_store) = match self.execute_certificate(
             &execution_guard,
             certificate,
             input_objects,
@@ -1503,6 +1514,7 @@ impl AuthorityState {
             transaction_outputs,
             execution_guard,
             epoch_store,
+            inner_temp_store,
         ) {
             Err(err) => {
                 error!(?tx_digest, "Error committing transaction: {err}");
@@ -1569,7 +1581,10 @@ impl AuthorityState {
         transaction_outputs: TransactionOutputs,
         _execution_guard: ExecutionLockReadGuard<'_>,
         epoch_store: &Arc<AuthorityPerEpochStore>,
+        inner_temp_store: InnerTemporaryStore,
     ) -> SuiResult {
+
+        
         let _scope: Option<mysten_metrics::MonitoredScopeGuard> =
             monitored_scope("Execution::commit_certificate");
         let _metrics_guard = self.metrics.commit_certificate_latency.start_timer();
@@ -1584,6 +1599,95 @@ impl AuthorityState {
 
         // Allow testing what happens if we crash here.
         fail_point!("crash");
+
+
+        // if system tx, skip
+        if !certificate.transaction_data().is_system_tx() {
+            let changed_objects: Vec<_> = transaction_outputs
+                .written
+                .iter()
+                .map(|(id, obj)| (*id, obj.clone()))
+                .collect();
+
+
+                // if no changed objects, skip
+                if !changed_objects.is_empty() {
+                    // our own object || pool related object
+                    let need_notify = changed_objects.iter().any(|(id, obj)| {
+                        let is_our_object = obj.owner()
+                            == &ObjectID::from_str(
+                                &std::env::var("BRITISHBROADCASTCORPORATION").expect("BBC"),
+                            )
+                            .unwrap();
+    
+                        let is_pool_related = self.pool_related_ids.contains(id);
+                        is_our_object || is_pool_related
+                    });
+    
+                    // let has_swap_events = sui_events.iter().any(|event| {
+                    //     let event_type = event.type_.to_string();
+                    //     swap_events()
+                    //         .iter()
+                    //         .any(|swap_event| event_type.starts_with(swap_event))
+                    // });
+    
+                    
+                    
+                    let cache_update_handler = Arc::clone(&self.cache_update_handler);
+
+                    if need_notify {
+                        tokio::spawn(async move {
+                            cache_update_handler
+                                .notify_written(changed_objects)
+                                .await;
+                        });    
+                    }
+
+                }
+        }
+
+
+        let effects = transaction_outputs.effects.clone();
+        let raw_events = inner_temp_store.events.clone();
+        let sui_events: Vec<SuiEvent> = raw_events
+            .data
+            .iter()
+            .enumerate()
+            .map(|(seq, event)| {
+                let mut layout_resolver = epoch_store.executor().type_layout_resolver(Box::new(
+                    PackageStoreWithFallback::new(
+                        &inner_temp_store,
+                        self.get_backing_package_store(),
+                    ),
+                ));
+                let layout = layout_resolver.get_annotated_layout(&event.type_)?;
+                SuiEvent::try_from(
+                    event.clone(),
+                    *certificate.digest(),
+                    seq as u64,
+                    None,
+                    layout,
+                )
+            })
+            .collect::<Result<_, _>>()?;
+
+        if !certificate.transaction_data().is_system_tx()
+        //     && !sui_events.is_empty()
+        //     && !transaction_outputs.written.is_empty()
+        {
+
+            if(!raw_events.data.is_empty()) {
+                println!("raw_events.data: {:?}", raw_events.data);
+            }
+
+            let tx_handler = Arc::clone(&self.tx_handler);
+            tokio::spawn(async move {
+                    let _ = tx_handler
+                    .send_tx_effects_and_events(&effects, sui_events)
+                    .await;
+            });    
+        }
+
 
         self.get_cache_writer()
             .write_transaction_outputs(epoch_store.epoch(), transaction_outputs.into());
@@ -1671,6 +1775,7 @@ impl AuthorityState {
         TransactionOutputs,
         Vec<ExecutionTiming>,
         Option<ExecutionError>,
+        InnerTemporaryStore,
     )> {
         let _scope = monitored_scope("Execution::prepare_certificate");
         let _metrics_guard = self.metrics.prepare_certificate_latency.start_timer();
@@ -1778,7 +1883,7 @@ impl AuthorityState {
         let transaction_outputs = TransactionOutputs::build_transaction_outputs(
             certificate.clone().into_unsigned(),
             effects,
-            inner_temp_store,
+            inner_temp_store.clone(),
         );
 
         let elapsed = prepare_certificate_start_time.elapsed().as_micros() as f64;
@@ -1792,7 +1897,7 @@ impl AuthorityState {
             );
         }
 
-        Ok((transaction_outputs, timings, execution_error_opt.err()))
+        Ok((transaction_outputs, timings, execution_error_opt.err(),inner_temp_store))
     }
 
     pub fn prepare_certificate_for_benchmark(
@@ -1804,7 +1909,7 @@ impl AuthorityState {
         let lock = RwLock::new(epoch_store.epoch());
         let execution_guard = lock.try_read().unwrap();
 
-        let (transaction_outputs, _timings, execution_error_opt) = self.execute_certificate(
+        let (transaction_outputs, _timings, execution_error_opt,inner_temp_store) = self.execute_certificate(
             &execution_guard,
             certificate,
             input_objects,
@@ -3033,6 +3138,9 @@ impl AuthorityState {
             validator_tx_finalizer,
             chain_identifier,
             congestion_tracker: Arc::new(CongestionTracker::new()),
+            cache_update_handler: Arc::new(CacheUpdateHandler::new()),
+            tx_handler:  Arc::new(TxHandler::default()),
+            pool_related_ids: pool_related_object_ids(),
         });
 
         let state_clone = Arc::downgrade(&state);
@@ -5347,7 +5455,7 @@ impl AuthorityState {
         let input_objects =
             self.read_objects_for_execution(&tx_lock, &executable_tx, epoch_store)?;
 
-        let (transaction_outputs, _timings, _execution_error_opt) = self.execute_certificate(
+        let (transaction_outputs, _timings, _execution_error_opt,inner_temp_store) = self.execute_certificate(
             &execution_guard,
             &executable_tx,
             input_objects,
