@@ -863,6 +863,14 @@ impl WritebackCache {
         &self.store
     }
 
+    async fn update_package_cache(&self, package_updates: &[(ObjectID, Object)]) -> SuiResult {
+        for (id, object) in package_updates {
+            self.packages
+                .insert(*id, PackageObject::new(object.clone()));
+        }
+        Ok(())
+    }
+
     #[instrument(level = "debug", skip_all)]
     fn write_transaction_outputs(&self, epoch_id: EpochId, tx_outputs: Arc<TransactionOutputs>) {
         trace!(digest = ?tx_outputs.transaction.digest(), "writing transaction outputs to cache");
@@ -2107,6 +2115,24 @@ impl TransactionCacheRead for WritebackCache {
 }
 
 impl ExecutionCacheWrite for WritebackCache {
+
+    fn update_underlying(&self, clear_cache: bool) {
+        self.store
+            .perpetual_tables
+            .objects
+            // .rocksdb
+            .try_catch_up_with_primary()
+            .unwrap();
+
+        if clear_cache {
+            self.clear();
+        }
+    }
+
+    fn reload_objects(&self, objects: Vec<(ObjectID, Object)>) {
+        self.reload_cached(objects);
+    }
+
     fn acquire_transaction_locks(
         &self,
         epoch_store: &AuthorityPerEpochStore,
@@ -2126,6 +2152,14 @@ impl ExecutionCacheWrite for WritebackCache {
     fn write_transaction_outputs(&self, epoch_id: EpochId, tx_outputs: Arc<TransactionOutputs>) {
         WritebackCache::write_transaction_outputs(self, epoch_id, tx_outputs);
     }
+
+    fn update_package_cache<'a>(
+        &'a self,
+        package_updates: &'a [(ObjectID, Object)],
+    ) -> BoxFuture<'_, SuiResult> {
+        WritebackCache::update_package_cache(self, package_updates).boxed()
+    }
+
 
     #[cfg(test)]
     fn write_object_entry_for_test(&self, object: Object) {
