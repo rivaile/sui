@@ -343,117 +343,116 @@ pub fn derive_dbmap_utils_general(input: TokenStream) -> TokenStream {
         }
     };
 
-    if is_tidehunter {
-        TokenStream::from(quote! {
-            #base_code
-            impl <
-                    #(
-                        #generics_names: #generics_bounds_token,
-                    )*
-                > #intermediate_db_map_struct_name #generics {
+    // if is_tidehunter {
+    //     TokenStream::from(quote! {
+    //         #base_code
+    //         impl <
+    //                 #(
+    //                     #generics_names: #generics_bounds_token,
+    //                 )*
+    //             > #intermediate_db_map_struct_name #generics {
                 
-                /// Opens the tables in read-only mode but returns an instance of the original struct.
-                /// All write operations will fail at runtime.
-                #[allow(unused_parens)]
-                pub fn open_tables_read_only_as_rw_impl(
-                    path: std::path::PathBuf,
-                    metric_conf: typed_store::rocks::MetricConf,
-                ) -> Self {
-                    let p: std::path::PathBuf = tempfile::tempdir()
-                        .expect("Failed to open temporary directory")
-                        .into_path();
+    //             /// Opens the tables in read-only mode but returns an instance of the original struct.
+    //             /// All write operations will fail at runtime.
+    //             #[allow(unused_parens)]
+    //             pub fn open_tables_read_only_as_rw_impl(
+    //                 path: std::path::PathBuf,
+    //                 metric_conf: typed_store::rocks::MetricConf,
+    //             ) -> Self {
+    //                 let p: std::path::PathBuf = tempfile::tempdir()
+    //                     .expect("Failed to open temporary directory")
+    //                     .into_path();
 
-                    let inner = Self::open_tables_impl(
-                        path,
-                        Some(p),
-                        false,
-                        metric_conf,
-                        None,
-                        None,
-                        false,
-                    );
-                    Self {
-                        #(
-                            #field_names: inner.#field_names,
-                        )*
-                    }
-                }
+    //                 let inner = Self::open_tables_impl(
+    //                     path,
+    //                     Some(p),
+    //                     metric_conf,
+    //                     None,
+    //                     None,
+    //                     false,
+    //                 );
+    //                 Self {
+    //                     #(
+    //                         #field_names: inner.#field_names,
+    //                     )*
+    //                 }
+    //             }
                     
-                /// Opens a set of tables in read-write mode
-                /// If as_secondary_with_path is set, the DB is opened in read only mode with the path specified
-                pub fn open_tables_impl(
-                    path: std::path::PathBuf,
-                    metric_conf: typed_store::rocks::MetricConf,
-                    cf_configs: std::collections::BTreeMap<String, typed_store::tidehunter_util::ThConfig>,
-                ) -> Self {
-                    let mut builder = typed_store::tidehunter_util::KeyShapeBuilder::new();
-                    let (
-                        #(
-                            #field_names,
-                        )*
-                    ) = (
-                        #(
-                            typed_store::tidehunter_util::add_key_space(
-                                &mut builder,
-                                stringify!(#cf_names),
-                                &cf_configs[stringify!(#cf_names)],
-                            ),
-                        )*
-                    );
-                    let key_shape = builder.build();
-                    let inner_db = typed_store::tidehunter_util::open(path.as_path(), key_shape, metric_conf.db_name.clone());
-                    let db = std::sync::Arc::new(typed_store::rocks::Database::new(
-                        typed_store::rocks::Storage::TideHunter(inner_db),
-                        metric_conf));
-                    let (
-                        #(
-                            #field_names
-                        ),*
-                    ) = (#(
-                        DBMap::#inner_types::reopen_th(
-                            db.clone(), stringify!(#cf_names), #field_names,
-                            cf_configs[stringify!(#cf_names)].prefix.clone()
-                        )
-                    ),*);
-                    Self {
-                        #(
-                            #field_names,
-                        )*
-                    }
-                }
-            }
+    //             /// Opens a set of tables in read-write mode
+    //             /// If as_secondary_with_path is set, the DB is opened in read only mode with the path specified
+    //             pub fn open_tables_impl(
+    //                 path: std::path::PathBuf,
+    //                 metric_conf: typed_store::rocks::MetricConf,
+    //                 cf_configs: std::collections::BTreeMap<String, typed_store::tidehunter_util::ThConfig>,
+    //             ) -> Self {
+    //                 let mut builder = typed_store::tidehunter_util::KeyShapeBuilder::new();
+    //                 let (
+    //                     #(
+    //                         #field_names,
+    //                     )*
+    //                 ) = (
+    //                     #(
+    //                         typed_store::tidehunter_util::add_key_space(
+    //                             &mut builder,
+    //                             stringify!(#cf_names),
+    //                             &cf_configs[stringify!(#cf_names)],
+    //                         ),
+    //                     )*
+    //                 );
+    //                 let key_shape = builder.build();
+    //                 let inner_db = typed_store::tidehunter_util::open(path.as_path(), key_shape, metric_conf.db_name.clone());
+    //                 let db = std::sync::Arc::new(typed_store::rocks::Database::new(
+    //                     typed_store::rocks::Storage::TideHunter(inner_db),
+    //                     metric_conf));
+    //                 let (
+    //                     #(
+    //                         #field_names
+    //                     ),*
+    //                 ) = (#(
+    //                     DBMap::#inner_types::reopen_th(
+    //                         db.clone(), stringify!(#cf_names), #field_names,
+    //                         cf_configs[stringify!(#cf_names)].prefix.clone()
+    //                     )
+    //                 ),*);
+    //                 Self {
+    //                     #(
+    //                         #field_names,
+    //                     )*
+    //                 }
+    //             }
+    //         }
 
-            impl <
-                #(
-                    #generics_names: #generics_bounds_token,
-                )*
-            > #name #generics {
-                pub fn open_tables_read_write(
-                    path: std::path::PathBuf,
-                    metric_conf: typed_store::rocks::MetricConf,
-                    cf_configs: std::collections::BTreeMap<String, typed_store::tidehunter_util::ThConfig>,
-                ) -> Self {
-                    let inner = #intermediate_db_map_struct_name::open_tables_impl(path, metric_conf, cf_configs);
-                    Self {
-                        #(
-                            #field_names: inner.#field_names,
-                        )*
-                    }
-                }
+    //         impl <
+    //             #(
+    //                 #generics_names: #generics_bounds_token,
+    //             )*
+    //         > #name #generics {
+    //             pub fn open_tables_read_write(
+    //                 path: std::path::PathBuf,
+    //                 metric_conf: typed_store::rocks::MetricConf,
+    //                 cf_configs: std::collections::BTreeMap<String, typed_store::tidehunter_util::ThConfig>,
+    //             ) -> Self {
+    //                 let inner = #intermediate_db_map_struct_name::open_tables_impl(path, metric_conf, cf_configs);
+    //                 Self {
+    //                     #(
+    //                         #field_names: inner.#field_names,
+    //                     )*
+    //                 }
+    //             }
 
-                pub fn get_read_only_handle (
-                    _: std::path::PathBuf,
-                    _: Option<std::path::PathBuf>,
-                    _: Option<typed_store::rocksdb::Options>,
-                    _: typed_store::rocks::MetricConf,
-                ) -> #secondary_db_map_struct_name #generics {
-                    unimplemented!("read only mode is not supported for TideHunter");
-                }
-            }
+    //             pub fn get_read_only_handle (
+    //                 _: std::path::PathBuf,
+    //                 _: Option<std::path::PathBuf>,
+    //                 _: Option<typed_store::rocksdb::Options>,
+    //                 _: typed_store::rocks::MetricConf,
+    //             ) -> #secondary_db_map_struct_name #generics {
+    //                 unimplemented!("read only mode is not supported for TideHunter");
+    //             }
+    //         }
 
-            pub struct #secondary_db_map_struct_name;
-        })
-    } else {
+    //         pub struct #secondary_db_map_struct_name;
+    //     })
+    // } else {
         TokenStream::from(quote! {
             #base_code
 
@@ -477,7 +476,6 @@ pub fn derive_dbmap_utils_general(input: TokenStream) -> TokenStream {
                 let inner = Self::open_tables_impl(
                     path,
                     Some(p),
-                    false,
                     metric_conf,
                     None,
                     None,
@@ -620,5 +618,5 @@ pub fn derive_dbmap_utils_general(input: TokenStream) -> TokenStream {
             }
             #secondary_code
         })
-    }
+    // }
 }
