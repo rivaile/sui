@@ -28,7 +28,6 @@ exclude = [
   "external-crates/move/crates/move-command-line-common",
   "external-crates/move/crates/move-compiler",
   "external-crates/move/crates/move-compiler-transactional-tests",
-  "external-crates/move/crates/move-core-types",
   "external-crates/move/crates/move-coverage",
   "external-crates/move/crates/move-disassembler",
   "external-crates/move/crates/move-docgen",
