@@ -217,6 +217,7 @@ members = [
   "sui-execution/v2/sui-adapter",
   "sui-execution/v2/sui-move-natives",
   "sui-execution/v2/sui-verifier",
+  "external-crates/move/crates/move-core-types",
 ]
 
 [workspace.package]
