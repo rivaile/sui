@@ -799,7 +799,7 @@ impl WritebackCache {
                 }
             }
         } else {
-            self.metrics.record_cache_miss(request_type, "object_by_id");
+            self.record_cache_miss(request_type, "object_by_id", Some(object_id));
         }
 
         Self::with_locked_cache_entries(
@@ -1382,6 +1382,8 @@ impl WritebackCache {
     }
 
     pub fn clear(&self) {
+        self.object_by_id_cache.invalidate_all();
+        self.packages.invalidate_all();
         self.cached.clear();
     }
 
