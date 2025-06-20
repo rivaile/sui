@@ -10,7 +10,6 @@ edition = "2021"
 workspace = true
 
 [dependencies]
-interprocess.workspace = true
 antithesis_sdk.workspace = true
 anyhow = { workspace = true, features = ["backtrace"] }
 arc-swap.workspace = true

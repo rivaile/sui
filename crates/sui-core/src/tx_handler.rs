@@ -2,20 +2,18 @@ use std::{fs, sync::Arc};
 
 use anyhow::Result;
 
-use interprocess::local_socket::{
-    tokio::{prelude::*, Stream},
-    GenericNamespaced, ListenerOptions,
-};
+use tokio::net::{UnixListener, UnixStream};
+use tokio::io::AsyncWriteExt;
+use tokio::sync::Mutex;
 use sui_json_rpc_types::SuiEvent;
 use sui_types::effects::TransactionEffects;
-use tokio::{io::AsyncWriteExt, sync::Mutex};
 
 pub const TX_SOCKET_PATH: &str = "/tmp/sui_tx.sock";
 
 #[derive(Clone)]
 pub struct TxHandler {
     path: String,
-    conns: Arc<Mutex<Vec<Stream>>>,
+    conns: Arc<Mutex<Vec<UnixStream>>>,
 }
 
 impl Default for TxHandler {
@@ -35,18 +33,15 @@ impl TxHandler {
     pub fn new(path: &str) -> Self {
         let _ = fs::remove_file(path);
 
-        let name = path
-            .to_ns_name::<GenericNamespaced>()
-            .expect("Invalid tx socket path");
-        let opts = ListenerOptions::new().name(name);
-        let listener = opts.create_tokio().expect("Failed to bind tx socket");
+        println!("Binding tx socket to {}", path);
+        let listener = UnixListener::bind(path).expect("Failed to bind tx socket");
         let conns = Arc::new(Mutex::new(vec![]));
         let conns_clone = conns.clone();
 
         tokio::spawn(async move {
             loop {
                 let conn = match listener.accept().await {
-                    Ok(c) => c,
+                    Ok((stream, _addr)) => stream,
                     _err => {
                         continue;
                     }

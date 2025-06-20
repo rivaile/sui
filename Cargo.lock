@@ -13726,7 +13726,6 @@ dependencies = [
  "governor",
  "im",
  "insta",
- "interprocess",
  "itertools 0.13.0",
  "lru 0.10.0",
  "mockall",
