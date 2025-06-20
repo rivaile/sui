@@ -1383,7 +1383,6 @@ impl WritebackCache {
 
     pub fn clear(&self) {
         self.object_by_id_cache.invalidate_all();
-        self.packages.invalidate_all();
         self.cached.clear();
     }
 
